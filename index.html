@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StudieScan</title>
+<style>
+:root{font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:#20243a;background:#f4f5fb}
+*{box-sizing:border-box}body{margin:0}.hero{background:linear-gradient(135deg,#4438ca,#7b5ce1);color:white;padding:28px 18px 34px}
+.wrap{max-width:900px;margin:auto}.hero h1{margin:0 0 8px;font-size:2rem}.hero p{margin:0;opacity:.93}
+main{max-width:900px;margin:-15px auto 40px;padding:0 14px}.panel{background:white;border-radius:16px;padding:18px;margin-bottom:14px;box-shadow:0 5px 24px #24265b0c}
+h2{font-size:1.12rem;margin:0 0 12px}p.help{color:#666b7c;font-size:.92rem;line-height:1.5;margin:7px 0 12px}
+button,.filebutton{border:0;border-radius:10px;padding:11px 14px;font-weight:700;cursor:pointer;background:#5145cd;color:white}
+button.secondary{background:#ecebff;color:#3d35a2}button.danger{background:#fff0f0;color:#9b2525}
+input[type=file]{max-width:100%;margin:8px 0}textarea,input[type=text],input[type=date]{font:inherit;border:1px solid #d9dbea;border-radius:10px;padding:11px;width:100%;background:white;color:#20243a}
+textarea{min-height:140px;resize:vertical}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.status{font-size:.9rem;color:#5c6174;margin-top:8px;white-space:pre-wrap}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.pill{font-size:.78rem;border-radius:99px;padding:4px 8px;background:#eeeaff;color:#4338a6;font-weight:700}.pill.lesson{background:#e5f3ff;color:#155a8a}.pill.blocked{background:#fff1d8;color:#865400}
+.task{border:1px solid #e4e5ef;border-radius:12px;padding:12px;margin:9px 0;display:flex;gap:10px;align-items:flex-start}
+.task.done{background:#f7f8fb;opacity:.75}.task.done .tasktitle{text-decoration:line-through}
+.task input[type=checkbox]{margin-top:5px;width:18px;height:18px;flex-shrink:0}
+.taskbody{flex:1;min-width:0}.tasktitle{font-weight:700;overflow-wrap:anywhere}.meta{font-size:.84rem;color:#686d7f;margin-top:4px;line-height:1.45}.blockednote{font-size:.84rem;color:#8a5a00;margin-top:6px}
+.tasktools{display:flex;gap:6px;align-items:center}.tasktools button{padding:6px 9px;font-size:.82rem}
+.row{display:grid;grid-template-columns:1fr 150px;gap:8px}.small{font-size:.82rem;color:#6c7182}.empty{padding:18px;text-align:center;color:#777b8b;border:1px dashed #d7d9e7;border-radius:12px}
+@media(max-width:560px){.row{grid-template-columns:1fr}.task{padding:10px}.hero h1{font-size:1.7rem}}
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap"><h1>StudieScan</h1><p>Scan je studiewijzer, herken lessen en taken, en volg de juiste volgorde.</p></div></header>
+<main>
+<section class="panel">
+<h2>1. Scan je studiewijzer</h2>
+<p class="help">Upload een foto of screenshot. De tekst wordt herkend met OCR. Controleer die tekst altijd even: handschrift en kleine letters kunnen fout gelezen worden.</p>
+<input id="imageInput" type="file" accept="image/*">
+<div class="actions"><button id="scanBtn">Scan afbeelding</button><button class="secondary" id="demoBtn">Voorbeeld laden</button></div>
+<div class="status" id="scanStatus" aria-live="polite"></div>
+</section>
+<section class="panel">
+<h2>2. Herkende tekst controleren</h2>
+<p class="help">Zorg dat codes en volgorden goed staan, bijvoorbeeld <b>1 | NE MC 1</b> en <b>2 | NEa</b>. Zet elke genummerde regel liefst op een aparte lijn.</p>
+<textarea id="sourceText" placeholder="De gescande tekst verschijnt hier. Je kunt de tekst ook zelf plakken of aanpassen."></textarea>
+<div class="actions"><button id="detectBtn">Herken lessen en taken</button><button class="secondary" id="clearTextBtn">Wis tekst</button></div>
+</section>
+<section class="panel">
+<h2>3. Mijn checklist</h2>
+<div class="legend"><span class="pill">Taak</span><span class="pill lesson">Les</span><span class="pill blocked">Wacht op vorige stap</span></div>
+<p class="help">Bij genummerde regels wordt de volgorde bijgehouden. Een stap is pas vrij als de vorige stap in die volgorde is afgevinkt. Zo zie je bijvoorbeeld dat NEa na NE MC 1 komt, of dat HBa klaar moet zijn vóór HB MC 1.</p>
+<div id="taskList"></div>
+<div class="small" id="progress"></div>
+</section>
+<section class="panel">
+<h2>Zelf iets toevoegen</h2>
+<div class="row"><input id="manualTask" type="text" placeholder="Bijv. WIb — oefeningen maken"><input id="manualDate" type="date" aria-label="Deadline (optioneel)"></div>
+<div class="actions"><button id="addBtn">Voeg toe</button><button class="secondary" id="exportBtn">Exporteer checklist (.txt)</button><button class="danger" id="resetBtn">Wis checklist</button></div>
+</section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const subjects={HB:"Historisch bewustzijn",NE:"Nederlands",EN:"Engels",FR:"Frans",NW:"Natuurwetenschappen",CB:"Cultuurbeschouwing",RB:"Ruimtelijk bewustzijn",WI:"Wiskunde",TE:"Techniek"};
+const STORE="studiescan_v2_tasks";
+let tasks=[];
+try{tasks=JSON.parse(localStorage.getItem(STORE)||"[]");if(!Array.isArray(tasks))tasks=[];}catch(e){tasks=[];}
+const $=id=>document.getElementById(id);
+function save(){localStorage.setItem(STORE,JSON.stringify(tasks));render();}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function subjectName(code){return subjects[code]||code;}
+function parseCode(raw){
+ const s=raw.toUpperCase().replace(/\s+/g," ").trim();
+ let m=s.match(/^(HB|NE|EN|FR|NW|CB|RB|WI|TE)\s*[-:]?\s*MC\s*[-:]?\s*(\d+)$/);
+ if(m)return {code:m[1]+" MC "+m[2],subject:m[1],type:"lesson",label:subjectName(m[1])+" — les "+m[2]};
+ m=s.match(/^(HB|NE|EN|FR|NW|CB|RB|WI|TE)\s*[-:]?\s*([A-Z])$/);
+ if(m)return {code:m[1]+m[2].toLowerCase(),subject:m[1],type:"task",label:subjectName(m[1])+" — taak "+m[2].toLowerCase()};
+ m=s.match(/^(HB|NE|EN|FR|NW|CB|RB|WI|TE)\s*[-:]?\s*MC\s*[-:]?\s*(\d+)\b/i);
+ if(m)return {code:m[1]+" MC "+m[2],subject:m[1],type:"lesson",label:subjectName(m[1])+" — les "+m[2]};
+ m=s.match(/^(HB|NE|EN|FR|NW|CB|RB|WI|TE)\s*[-:]?\s*([a-z])\b/i);
+ if(m)return {code:m[1]+m[2].toLowerCase(),subject:m[1],type:"task",label:subjectName(m[1])+" — taak "+m[2].toLowerCase()};
+ return null;
+}
+function extractItems(text){
+ const lines=text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+ const items=[]; let lastItem=null; let orderCounter=0;
+ for(let i=0;i<lines.length;i++){
+   const line=lines[i];
+   // Numbered sequence rows, e.g. "1 | NE MC 1", "2 | NEa".
+   const numbered=line.match(/^\s*(\d+)\s*[|｜]\s*(.*?)\s*$/);
+   if(numbered){
+     const parsed=parseCode(numbered[2]);
+     if(parsed){
+       orderCounter++;
+       const item={id:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),text:parsed.label,code:parsed.code,type:parsed.type,done:false,date:"",sequence:Number(numbered[1]),sequenceGroup:"numbered",detail:"",source:line,order:orderCounter};
+       items.push(item);lastItem=item;continue;
+     }
+   }
+   // Find standalone codes or code at start of a line, with optional description after it.
+   const codePattern=/(?:^|[\s([,;:])((?:HB|NE|EN|FR|NW|CB|RB|WI|TE)\s*(?:MC\s*\d+|[a-z]))(?=$|[\s.,:;)\]])/ig;
+   let matches=[...line.matchAll(codePattern)];
+   if(matches.length){
+     for(let j=0;j<matches.length;j++){
+       const raw=matches[j][1].trim();
+       const parsed=parseCode(raw);
+       if(!parsed)continue;
+       const start=(matches[j].index||0)+matches[j][0].indexOf(matches[j][1]);
+       const next=matches[j+1]?.index ?? line.length;
+       let suffix=line.slice(start+raw.length,next).replace(/^[\s|—–:-]+/,"").trim();
+       // Keep short descriptive text when it clearly follows the code.
+       const item={id:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),text:parsed.label+(suffix?" — "+suffix:""),code:parsed.code,type:parsed.type,done:false,date:"",sequence:null,sequenceGroup:null,detail:suffix,source:line,order:++orderCounter};
+       items.push(item);lastItem=item;
+     }
+   } else if(lastItem && !/^\d+\s*[|｜]/.test(line) && line.length>3 && !/^(pagina|p\.?)\s*\d+/i.test(line)){
+     // A following description line may belong to the most recent code.
+     if(lastItem.source===lines[i-1] && lastItem.detail.length===0 && line.length<150){
+       lastItem.text += " — "+line; lastItem.detail=line;
+     }
+   }
+ }
+ // Link numbered steps in the order they appear, even when the printed numbers repeat in sections.
+ // Keep only the immediate predecessor so the user can complete the sequence step by step.
+ const ordered=items.filter(x=>x.sequence!==null);
+ for(let i=1;i<ordered.length;i++){ordered[i].dependsOn=ordered[i-1].id;}
+ return items;
+}
+function render(){
+ const list=$("taskList");
+ if(!tasks.length){list.innerHTML='<div class="empty">Nog geen lessen of taken. Scan je studiewijzer en klik op “Herken lessen en taken”.</div>';$("progress").textContent="";return;}
+ const sorted=[...tasks].sort((a,b)=>{
+   if(a.sequence!==null && b.sequence!==null)return (a.order||0)-(b.order||0);
+   if(a.sequence!==null)return -1;if(b.sequence!==null)return 1;return (a.order||0)-(b.order||0);
+ });
+ const byId=new Map(tasks.map(t=>[t.id,t]));
+ list.innerHTML=sorted.map(t=>{
+   const prev=t.dependsOn?byId.get(t.dependsOn):null;
+   const blocked=!!(prev&&!prev.done);
+   const type=t.type==="lesson"?"Les":"Taak";
+   const pill=t.type==="lesson"?'pill lesson':'pill';
+   const dep=prev?`Volgorde: na ${escapeHtml(prev.code||prev.text)}${prev.done?" (afgevinkt)":" (nog niet afgevinkt)"}.`:"";
+   return `<div class="task ${t.done?"done":""}">
+    <input type="checkbox" data-check="${escapeHtml(t.id)}" ${t.done?"checked":""} aria-label="Markeer als klaar">
+    <div class="taskbody"><div><span class="${pill}">${type}</span> <span class="small">${escapeHtml(t.code||"")}</span></div>
+    <div class="tasktitle">${escapeHtml(t.text)}</div>
+    ${t.sequence!==null?`<div class="meta">Volgorde nr. ${escapeHtml(t.sequence)}</div>`:""}
+    ${t.date?`<div class="meta">Deadline: ${escapeHtml(t.date)}</div>`:""}
+    ${prev?`<div class="${blocked?"blockednote":"meta"}">${blocked?"Wacht op vorige stap. ":""}${dep}</div>`:""}
+    </div><div class="tasktools"><button class="secondary" data-delete="${escapeHtml(t.id)}" title="Verwijder">×</button></div>
+   </div>`;
+ }).join("");
+ const done=tasks.filter(t=>t.done).length;
+ $("progress").textContent=`${done} van ${tasks.length} stappen afgevinkt.`;
+ list.querySelectorAll("[data-check]").forEach(el=>el.addEventListener("change",()=>{
+   const t=tasks.find(x=>x.id===el.dataset.check);if(!t)return;
+   const prev=t.dependsOn?tasks.find(x=>x.id===t.dependsOn):null;
+   if(el.checked&&prev&&!prev.done){el.checked=false;alert("Doe eerst de vorige stap: "+(prev.code||prev.text));return;}
+   t.done=el.checked;save();
+ }));
+ list.querySelectorAll("[data-delete]").forEach(el=>el.addEventListener("click",()=>{
+   const id=el.dataset.delete;tasks=tasks.filter(x=>x.id!==id);tasks.forEach(x=>{if(x.dependsOn===id)x.dependsOn=null;});save();
+ }));
+}
+async function scan(){
+ const file=$("imageInput").files[0];if(!file){$("scanStatus").textContent="Kies eerst een afbeelding.";return;}
+ if(!window.Tesseract){$("scanStatus").textContent="OCR kon niet laden. Controleer je internetverbinding.";return;}
+ $("scanBtn").disabled=true;$("scanStatus").textContent="Bezig met scannen…";
+ try{const result=await Tesseract.recognize(file,"nld+eng",{logger:m=>{if(m.status)$("scanStatus").textContent=m.status+(m.progress!=null?" — "+Math.round(m.progress*100)+"%":"");}});
+ $("sourceText").value=result.data.text;$("scanStatus").textContent="Klaar. Controleer de herkende tekst en klik daarna op ‘Herken lessen en taken’.";}
+ catch(e){$("scanStatus").textContent="Scannen lukte niet. Probeer een scherpere foto of plak de tekst zelf.";}
+ finally{$("scanBtn").disabled=false;}
+}
+function detect(){
+ const found=extractItems($("sourceText").value);
+ if(!found.length){alert("Ik vond geen herkenbare codes. Controleer of codes zoals NEa, WIb of MC 1 zichtbaar zijn.");return;}
+ // Avoid duplicates against existing tasks by source+code+sequence.
+ const existing=new Set(tasks.map(t=>(t.source||"")+"|"+(t.code||"")+"|"+(t.sequence??"")));
+ const fresh=found.filter(t=>!existing.has((t.source||"")+"|"+(t.code||"")+"|"+(t.sequence??"")));
+ tasks.push(...fresh);save();
+ alert(`${fresh.length} nieuwe stappen toegevoegd. Controleer de checklist, want OCR kan fouten maken.`);
+}
+$("scanBtn").addEventListener("click",scan);
+$("detectBtn").addEventListener("click",detect);
+$("clearTextBtn").addEventListener("click",()=>$("sourceText").value="");
+$("demoBtn").addEventListener("click",()=>{$("sourceText").value="1 | NE MC 1\n2 | NEa\n\n1 | HBa\n2 | HB MC 1\n\nWIb — maak de oefeningen";});
+$("addBtn").addEventListener("click",()=>{
+ const val=$("manualTask").value.trim();if(!val)return;
+ const parsed=parseCode(val);
+ tasks.push({id:crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()),text:parsed?parsed.label:val,code:parsed?parsed.code:"",type:parsed?parsed.type:"task",done:false,date:$("manualDate").value,sequence:null,sequenceGroup:null,source:"handmatig",order:Date.now()});
+ $("manualTask").value="";$("manualDate").value="";save();
+});
+$("resetBtn").addEventListener("click",()=>{if(confirm("Alle lessen en taken uit de checklist wissen?")){tasks=[];save();}});
+$("exportBtn").addEventListener("click",()=>{
+ const lines=["StudieScan checklist",""];
+ [...tasks].sort((a,b)=>(a.order||0)-(b.order||0)).forEach(t=>{const prev=t.dependsOn?tasks.find(x=>x.id===t.dependsOn):null;lines.push(`${t.done?"[x]":"[ ]"} ${t.code?t.code+" — ":""}${t.text}${t.date?" (deadline: "+t.date+")":""}${prev?" | na "+(prev.code||prev.text):""}`);});
+ const blob=new Blob([lines.join("\n")],{type:"text/plain;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="studiescan-checklist.txt";a.click();URL.revokeObjectURL(a.href);
+});
+render();
+</script>
+</body>
+</html>
